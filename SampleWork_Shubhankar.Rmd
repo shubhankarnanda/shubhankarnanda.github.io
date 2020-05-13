@@ -1,0 +1,462 @@
+---
+title: "Churn Data Analysis"
+author: "Shubhankar Nanda"
+output: 
+       html_document: default
+       code_folding: default
+---   
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Summary ##
+
+The objective of this project is to analyze the dataset to understand and come up with factors that are important in identifying if a customer is going to churn. The data, from a telecommunication firm for 1 month about the various plans customers opt for, their payment information and the demographics, has been sourced from kaggle and explored to come up with which factors most explain the Churn status of the customer. Once the important variables were shorlisted, since most of them were categorical variables, they have been converted to dummy variables using one hot encoding and subsequently 5 different algorithms (SVM with linear and radial kernels, Decision Tree, Bossted Tree and k Nearest Neighbors) have been implemented to come up with one which has the best performance. Focus has also been given to the computation complexity to decide which algorithm is the best and Boosed Tree was decided to be the best. Further analysis has been done on the Boosted Tree model to see how it performs by implementing learning curve and finding the most important variables- the contract term, the tenure and internet service being the most important and how can the model perfromance be improved. 
+
+
+## Introduction ## 
+
+The problem being discussed here is one of the most common problem across industries- Customer churning. Organizations spend huge amounts of money in a bid to acquire the customers. But usually, they are not able to retain these customers and have to again invest in customer acquisition. In order to prevent customers from churning, it would be helpful if the companies could identify which customers are likely to churn/ leave.
+ 
+
+### Dataset ###
+For this project, we are working with the Churn dataset sourced from kaggle, which in turn received the dataset from the IBM Watson Analytics Community. The dataset contains information about the behavior of customers which can be analyzed to understand who is leaving.
+
+### Problem Statement ###
+A telecommunications company, concerned with the number of customers leaving their landline business for other competitors is wanting to understand who is leaving and why. To this extent, they have information about customers who left in the last 1 month and the various services they had signed up for, their account information and the demographic information.
+
+
+## Getting Ready ##
+
+
+
+```{r} 
+
+## Install packages
+list.of.packages <- c("data.table","GGally","corrplot","formattable","kableExtra","rattle","h2o","doParallel","caret","parallel","foreach","readxl","mltools")
+
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+
+if(length(new.packages)) install.packages(new.packages)
+
+
+## Loading the required libraries
+
+library(doParallel)
+library(foreach)
+library(parallel)
+library (data.table)
+library(tidyr)
+library(dplyr)
+library(caret)
+library(corrplot)
+library(mltools)
+
+## Importing/ Loading the dataset
+
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path)) ## Setting working directory to location of the R notebook
+churnds<-read.csv("WA_Fn-UseC_-Telco-Customer-Churn.csv", header = TRUE) ## reading in the file
+
+
+```
+
+We are installing and loading the required packages and then importing the dataset.
+
+
+## Exploratory Data Analysis (EDA) ##
+
+```{r}
+## Exploration of the dataset
+
+str(churnds)
+
+summary(churnds)
+
+```
+Looking at the structure and summary of the dataset, we can see that there are 7043 observations and 21 columns, with the last column, Churn denoting whether the customer churned in the last month- 1 meaning they churned and 0 meaning they didn't churn. 
+
+Another important fact we learn is that apart from a couple of columns, most of the columns/features are factors i.e. categorical variables storing if the customer opted for something or not. The only numerical features are-  
+1. tenure- which stores the number of months the customer has stayed with the company,   
+2. MonthlyCharges- the amount charged to the customer per month,  
+3. TotalCharges- The total amount charged in the lifetime of customer.  
+
+Additionally, SeniorCitizen has also been listed as a numeric variable but since it's only values are 0 and 1, it seems to have been incorrectly stored as a numeric variable.
+
+
+I believe that the churn status would not be impacted by the gender of the customer,but would be impacted by if the customer is a senior citizen, if the customer has dependents, if they have phone service and if they have opted for internet service. Most of the other variables are dependent on these basic services. Additionally, the charges and tenure of the customer should also impact their churn status. If the charges are more, the customer might want to look at other options to see if they get a better deal somewhere else.  
+
+----------------------------------------------------------------------------------------
+
+```{r}
+ds1<-na.omit(churnds) ## dropping the records having NA as values since only 11 such records were present
+
+ds1<- ds1%>% select(-customerID) ## dropping the customer ID as it is only an identifier and doesn't have any relation to the churn status
+
+```
+Of the 7043 observations, there were 11 observations which were missing some information for at least one of their columns. These records/observations are being dropped as the number of such records is too small compared to the overall size of the dataset.
+
+CusomterID has been stored as a factor and has 7043 different levels, meaning it is unique for each customer. It doesn't seem to have any relation with if the customer will churn and simple acts as a unique identifier and so it is better to simply drop the variable.
+
+
+```{r}
+
+plot(ds1$Churn,xlab="Churn",ylab="Number of customers",main="Churn status breakup") 
+
+```
+
+
+Plotting the data breakup gives an estimate of how the records are split. We can see that there is a class imbalance as majority of the 7032 customers didn't churn within the last month and only around 2000 (1869 to be exact) left the company.
+
+
+```{r, warning=FALSE}
+corrplot(cor(ds1-is.factor(ds1)),type="upper") ## Correlation plot of the dataset.
+
+ds1<-ds1 %>%  select(-TotalCharges)  ## dropping total charges as it has a very high correlation with tenure 
+
+```
+
+
+A correlation matrix was run and plotted using the corrplot function to get an idea of the correlation of the input variables. Since most of the variables are factors, the corrplot mostly had missing values (question marks) for them. But it shows a strong correlation between Total Charges and Tenure of the customer and a decent correlation between the Total Charges and Monthly Charges as well. Looking at this plot, I feel the variable Total Charges can be dropped as it appears to capture the same information as Monthly Charges and Tenure and to me, Tenure looks more important. Also, the total charges of a customer may not give as clear a picture as the monthly charges, which will capture the current charges of the customer, and can then be used to evaluate if they might be open to cheaper alternatives  
+  
+#### Gender ####
+The null hypothesis here is that the churn status does not depend on the gender of the person.
+```{r}
+
+ggplot(ds1, aes(x = Churn, fill = gender )) + geom_bar() +labs(y= "Number of Customers", x = "Churn Status",title="Churn status by gender of the customer")
+
+chisq.test(ds1$gender,ds1$Churn, correct=F) ## p value of 0.4737 indicates that there is no correlation between the chrun status and the gender
+```
+
+For gender, there is an almost equal ratio for the customers who churn and the customers who don't churn. Looking at the Chi-square test results, we see that the p-value is almost 0.47, meaning that the test statistic is not significant at the 95% or 90% confidence levels and so we can conclude that there is no dependency between the Gender and the Churn Status.
+So the null hypothesis was correct and we can actually drop the variable gender.
+
+  
+#### Senior Citizen ####
+I believe that Senior citizens don't usually want to change their service providers and so would not churn. The null hypothesis states that if the customer is a senior citizen, they are less likely to churn.
+
+```{r}
+ds1$SeniorCitizen<-as.factor(ds1$SeniorCitizen)  ## converting to factor
+
+levels(ds1$SeniorCitizen)<-c("No","Yes")
+
+ggplot(ds1, aes(x = Churn, fill = SeniorCitizen )) + geom_bar() +labs(y= "Number of Customers", x = "Churn Status",title="Churn status by if customer is a Senior Citizen")
+
+chisq.test(ds1$Churn,ds1$SeniorCitizen, correct=F) ## too low p value means there is a strong correlation between churning and if customer                                                               is senior citizen
+
+
+```
+
+Looking at the relation between the Churn status and if the person is a Senior Citizen, we can see that of the percentage of Senior Citizens who churn is higher than that of Senior citizens who don't churn, meaning that a Senior Citizen customer is more likely to churn. 
+
+Although this proves the null hypothesis to be incorrect, it does show that the Senior Citizen status of a customer is important in determining if the customer will churn. 
+
+The same information is confirmed by running a Chi Square test betwen the two factors. The test has a p-value which is too small and the corresponding chi square statistic is large enough to conclude that there is dependency between the 2 variables.   
+
+  
+#### Dependents ####
+Customers with dependents want stability and would not change their service provider frequently. So the null hypothesis is that the churn status is impacted by the dependents status.   
+```{r}
+ggplot(ds1, aes(x = Churn, fill = Dependents )) + geom_bar() +labs(y= "Number of Customers", x = "Churn Status",title="Churn status by if customer has dependents")
+
+chisq.test(ds1$Churn,ds1$Dependents, correct=F) ## storng correlation between if user has Dependents and Churn Status
+
+```
+The ratios of the dependent status for both the churn status is different with about 35% of customers who did not churn having dependents whiel for those who chruned, the corresponding number was close to 20%. Looking at the chi squre test results as well, we see that the test statistic has a large value which is significant at a very small level of significance.
+Thus the null hypothesis holds true.
+
+
+#### Multiple Lines ####
+If a customer has opted for multiple lines on his plan, it seems likely that he requries them for a reason, maybe to have dedicated lines for other family members, or to have different lines for private and business uses, or any other reason. But it would stand to reason that such a customer would be looking for stability and so may not be as keen for changing their provider. Hence we can say the null hypothesis is that Multiple Lines have a strong relation to the churn status of the customer. 
+
+```{r}
+ggplot(ds1, aes(x = Churn, fill=MultipleLines)) + geom_bar() +facet_wrap(~MultipleLines) + 
+  labs(y= "Number of Customers", x = "Churn Status",title="Churn status by if customer has opted for Multiple Lines")
+
+chisq.test(ds1$Churn,ds1$MultipleLines, correct=F) ## no correlation of Phone Service with output vairable and can be dropped
+
+
+```
+From the chart, we can see that the ratios of customers who churn to the customers that didn't churn in the last month is different for different status of Multiple Lines, meaning there is a relationship between the status of Multiple lines opted by the customer and their churn status. The same conclusion is supported by the CHi square test run between the CHurn status and the Multiple Lines status, with a p value of 0.0035, denoting significance at the 99.65% level of confidence and the test statistic having a value higher than the cutoff for the the corresponding p value and degree of freedom.
+Thus the null hypothesis holds true.
+
+  
+#### Internet Service ####
+The type of internet service opted for would definitely impact if a customer would churn. Customers who don't use internet service may not care about the current plans while those who opt for internet service would care about the service being offered- they may want the best plans with high speeds at the lowest prices and would always be on the lookout for best plans, from other service providers as well. 
+```{r}
+ggplot(ds1, aes(x = Churn, fill = InternetService )) + geom_bar() + facet_wrap(~InternetService) + 
+  labs(y= "Number of Customers", x = "Churn Status",title="Churn status by Internet Service type")
+
+
+chisq.test(ds1$Churn,ds1$InternetService, correct=F) ## significant correlation present at the 95% level of significance
+
+
+```
+In this case, the null hypothesis was that there is a strong dependency between the interet service tyep opted for and the churn status and looking at the results of the chart and the chi square test, we can conclude that the null hypothesis does hold true.
+
+  
+## Data Preparation ##
+From the data exploration abovem we get an idea of the important variables with respect to predicting the churn status of a customer.
+
+Additional Chi square tests were run on the remaining  payment categorical variables with respect to the Churn Status to see if there are any dependencies.
+Also, I believe that the variable internet service already captures the information other variables like Online Backup, security, streaming service would be capturing, and so chi square tests are being run to check the interdependency between these input variables to prove the same. If there is a significantly large value of the chi square statisitc for these variables, we can assume there is strong relation between them and they aren't  important, so the model size can be reduced by dropping these variables.
+```{r}
+
+chisq.test(ds1$Churn, ds1$Partner, correct=FALSE) ## low p value and high test statistic means the variable has a depnednecy with the CHurn 
+
+chisq.test(ds1$Churn,ds1$PhoneService, correct=F) ## too high p value denotes there is no dependency/correlation
+
+chisq.test(ds1$Churn,ds1$Contract, correct=F) ## strong  correlation. Both capture same info
+
+chisq.test(ds1$Churn,ds1$PaperlessBilling, correct=F) ## strong correlation. Both capture same info
+
+chisq.test(ds1$Churn,ds1$PaymentMethod, correct=F) ## strong correlation. Both capture same info
+
+chisq.test(ds1$PhoneService,ds1$MultipleLines, correct=F) ## too strong correlation denoting both capture same info 
+                                                                 
+
+chisq.test(ds1$InternetService,ds1$OnlineSecurity, correct=F) ## too strong correlation both capture same info 
+                                                                     
+
+chisq.test(ds1$InternetService,ds1$OnlineBackup, correct=F) ## too strong correlation denoting both capture same info
+                                                                    
+
+chisq.test(ds1$InternetService,ds1$DeviceProtection, correct=F) ## too strong correlation denoting both capture same info
+                                                                       
+
+chisq.test(ds1$OnlineSecurity,ds1$OnlineBackup, correct=F) ## too strong correlation denoting both capture same info 
+                                                                   
+
+chisq.test(ds1$OnlineSecurity,ds1$DeviceProtection, correct=F) ## too strong correlation denoting both capture same info
+                                                                       
+
+chisq.test(ds1$OnlineBackup,ds1$DeviceProtection, correct=F) ## too strong correlation denoting both capture same info 
+                                                                    
+
+chisq.test(ds1$InternetService,ds1$TechSupport, correct=F) ## too strong. Both capture same info
+
+chisq.test(ds1$InternetService,ds1$StreamingTV, correct=F) ## too strong. Both capture same info
+
+chisq.test(ds1$InternetService,ds1$StreamingMovies, correct=F) ## too strong. Both capture same info
+
+chisq.test(ds1$StreamingTV,ds1$StreamingMovies, correct=F) ## too strong. Both capture same info
+
+```
+Dropping all variables that do not impact the churn status or are depndent on another input variable. The modified dataset now has 12 columns/features- 11 input features and the output feature Churn.
+```{r}
+ds1<-ds1 %>%               ## dropping variables having low correlation with the output variable and strong correlation with other input variables
+  select(-c(gender,PhoneService,OnlineBackup,OnlineSecurity,StreamingTV,StreamingMovies,DeviceProtection,TechSupport))
+
+str(ds1)
+
+```
+
+The dataset is now being split into a 70:30 ratio of training and test sets for modelling. Seed has been set so that the results can be reproduced.
+
+
+```{r}
+
+
+## creating new dummy variables for the categorical variables using one hot encoding 
+
+dmyds1<-one_hot(as.data.table(ds1%>% select(-Churn)))
+dmyds1<-as.data.frame(cbind(dmyds1,ds1$Churn))
+
+## Renaming the Churn column to reflet the correct name
+names(dmyds1)[names(dmyds1) == 'V2'] <- 'Churn'
+
+## Correcting the names of the columns
+colnames(dmyds1) <- make.names(colnames(dmyds1)) 
+
+str(dmyds1) ## looking at structure of the final updated dataset
+
+
+## Splitting the data into train and test sets
+set.seed(11)
+ind<-createDataPartition(dmyds1$Churn ,p=0.7,list=F)
+trnds<-dmyds1[ind,]
+testds<-dmyds1[-ind,]
+
+```
+## Modelling ##
+Now that the data has been prepared for modelling, we begin with implementation of various algorithms to compare their performances and find the best algorithm for the dataset. Implementation of the algorithms has been done using the caret package in R. The main reason and the biggest advantage of using the caret package is that we don't need to worry about tuning the model. The caret function will tune the model to get the best fit automatically.
+
+All the algorithms have been implemented using cross validation so that we get a better estimate of the testing error. It essentially means that we are trying to ensure that the model is able to generalize well.
+
+
+### Linear SVM ###
+First algorithm  implemented was Support Vector Machines with a linear kernel. It has been implemented with a 5 fold cross validation.
+```{r}
+
+library(doParallel)
+cl <- parallel::makeCluster(detectCores(logical=TRUE), type='PSOCK')
+doParallel::registerDoParallel(cl)
+
+start.time <- Sys.time()
+trnControl <- trainControl(method='cv',number=5, allowParallel = T,verboseIter = F) 
+set.seed(11)
+ds1svmlnr <- train(Churn~., data=trnds,method="svmLinear",
+                   trControl=trnControl)
+ds1svmlnr_t<- Sys.time() - start.time
+
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+
+ds1svmlnr ## performance of the model on the training set
+
+## implementing Linear SVM on test dataset
+ds1lnrres <- predict(object=ds1svmlnr, newdata=testds)
+
+## confusion matrix to check performance
+confusionMatrix(data=ds1lnrres, reference=testds$Churn, positive="Yes")
+
+```
+The model found the best fit at C=1 with an accuracy of 79.85% on the training set and 79.13% accuracy for the corresponding test set. Although the performance of the model is good, on further investigation it was found that the sensitivity of the model was low- 54.64% while specificity was much better at 87.98%. It means that the model isn't able to identify the true positives i.e. it can't identify the customers who churn as well as it identifies the customers that do not churn.
+
+
+### Radial SVM ###
+Next, Support Vector Machine with Radial kernel was implemented with a 5 fold cross validation.
+
+```{r}
+
+cl <- parallel::makeCluster(detectCores(logical=TRUE), type='PSOCK')
+doParallel::registerDoParallel(cl)
+
+start.time <- Sys.time()
+trnControl <- trainControl(method='cv',number=5, allowParallel = TRUE,verboseIter = T) 
+set.seed(11)
+ds1svmrdl <- train(Churn~., data=trnds,method="svmRadial",
+                   trControl=trnControl)
+ds1svmrdl_t<- Sys.time() - start.time
+
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+ds1svmrdl ## performance measure of the model on the training set
+
+## implementing Radial SVM on test dataset
+ds1rdlres <- predict(object=ds1svmrdl, newdata=testds)
+
+## confusion matrix to check performance
+confusionMatrix(data=ds1rdlres, reference=testds$Churn, positive="Yes")
+
+```
+The model found the best fit with an accuracy of 79.59%. The using the same model, the test accuracy was predicted to be 79.17%. This model also suffered whith a bad sensitvity value of 50.89% but again had a good specificity value of 89.41%. Hence the model cannot identify the customers who churn as well as it identifies the customers who are not going to churn.
+
+### Decision trees (rpart2) ###
+The decision tree algorithm was implemented using rpart2 as the tree with a 5 fold cross validation.
+```{r}
+cl <- parallel::makeCluster(detectCores(logical=TRUE), type='PSOCK')
+doParallel::registerDoParallel(cl)
+
+start.time <- Sys.time()
+trnControl <- trainControl(method='cv',number=5, allowParallel = TRUE,verboseIter = T)
+set.seed(11)
+ds1rp2 <- train(Churn~., data=trnds,method="rpart2",
+                trControl=trnControl)
+ds1rp2_t<- Sys.time() - start.time
+
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+
+ds1rp2 ## performance measure of the model on  training set
+
+## Visualizing the tree
+plot(ds1rp2$finalModel)
+text(ds1rp2$finalModel)
+
+## implementing Radial SVM on test dataset
+ds1rp2res <- predict(object=ds1rp2, newdata=testds)
+
+## confusion matrix to check performance
+confusionMatrix(data=ds1rp2res, reference=testds$Churn, positive="Yes")
+
+```
+The implementation resulted in a best fit at a depth of 3 with the model being able to classify 78.88% of the training observations correctly and an impressive 
+78.75% of the corresponding test observations accurately. The sensitivity dropped down further to 38.21% while specificity rose to 93.41%.  
+
+
+### Ensemble Methods- Boosted Trees ###
+Boosted trees were chosen to implement the ensemble methods algorithm via the Extreme Gradient Boosting or XGBoost tree.  
+```{r}
+cl <- parallel::makeCluster(detectCores(logical=TRUE)-1, type='PSOCK')
+doParallel::registerDoParallel(cl)
+
+start.time <- Sys.time()
+trnControl <- trainControl(method='cv',number=5, allowParallel = TRUE,verboseIter = T) 
+set.seed(11)
+ds1xgb <- train(Churn~., data=trnds,method="xgbTree",
+                trControl=trnControl)
+ds1xgb_t<- Sys.time() - start.time
+
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+ds1xgb ## performance measure of the model on  training set
+
+## implementing XGBoost on test dataset
+ds1xgbres <- predict(object=ds1xgb, newdata=testds)
+
+## confusion matrix to check performance
+confusionMatrix(data=ds1xgbres, reference=testds$Churn,positive="Yes")
+
+
+```
+The model performed better than any of the previous models with best fit providing an 80.28% accuracy on the training set while the corresponding accuracy for the testing set was even better at 80.69%. Essentially this model was able to perform better on the testing set than on the training set, meaning it was able to generalize exceedingly well. The value for sensitivity improved greatly from the previous model to 53.93% while the specificity was also high at 90.37%. After Linear SVM, this model was the best at correctly identifying the customers who would churn, lagging behing by only .7%.
+
+
+### k- Nearest Neighbor ###
+The k-Nearest Neighbor algorithm was implemented with a 5 fold cross validation.
+
+```{r}
+cl <- parallel::makeCluster(detectCores(logical=TRUE), type='PSOCK')
+doParallel::registerDoParallel(cl)
+
+start.time <- Sys.time()
+trnControl <- trainControl(method='cv',number=5, allowParallel = TRUE,verboseIter = T)
+set.seed(11)
+ds1knn <- train(Churn~., data=trnds,method="knn",
+                trControl=trnControl)
+ds1knn_t<- Sys.time() - start.time
+
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+
+ds1knn ## performance measure of the model on  training set
+
+
+
+## implementing knn on test dataset
+ds1knnres <- predict(object=ds1knn, newdata=testds)
+
+## confusion matrix to check performance
+confusionMatrix(data=ds1knnres, reference=testds$Churn,positive="Yes")
+
+
+```
+The model found best fit with 9 as the number of nearest neighbors and was able to correctly identify 77.96% of the records in the training set. For the test set, it did even better and identified 77.80% records correctly, thus generalizing better than expected, with 50.36% of the churning customers correclty identified and 89.08% of the customers who didn't churn identified accurately.
+
+
+## Model Comparison ##
+
+Looking at all the models, the best performance was given by the Ensemble Methods- Extreme Gradient Boosting.followed by Support Vector Machine with Radial kernel. The worst performance of all the models was for k Nearest Neighbors. The performance has been summarized by the box plot below.   
+To pick the best model, we cannot only rely on the performance but would also need to look at the computation complexity. One way to estimate that can be to look at the time taken by the various algorithms to train on the final model.  
+The table below shows that kNN model was the quickest of all followed by decision tree. But in terms of performance, these two were the worst performing models. The Boosted Tree is 3rd in terms of time but much better than either of the SVM models with respect to time taken to train the final model. 
+
+```{r}
+
+modelcomp <- resamples(list(svmLinear = ds1svmlnr, svmRadial = ds1svmrdl, DecisionTree = ds1rp2, BoostedTree = ds1xgb, kNearestNeighbors= ds1knn))
+
+
+bwplot(modelcomp) ## Plot to compare performance of the various models
+
+```
+
+```{r}
+
+modelcomp$timings ## time taken for training on the best fit by the various models
+
+```
